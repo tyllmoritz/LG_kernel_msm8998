@@ -11,7 +11,11 @@
  *
  */
 
-#define pr_fmt(fmt)	"%s: " fmt, __func__
+#if defined(CONFIG_LGE_DISPLAY_COMMON)
+#define pr_fmt(fmt)     "[DisplayPort] %s: " fmt, __func__
+#else
+#define pr_fmt(fmt)     " %s: " fmt, __func__
+#endif
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -146,7 +150,6 @@ static int dp_cmd_fifo_tx(struct mdss_dp_drv_pdata *dp)
 	struct edp_buf *tp = &dp->txp;
 	void __iomem *base = dp->base;
 
-
 	len = tp->len;	/* total byte to cmd fifo */
 	if (len == 0)
 		return 0;
@@ -164,7 +167,6 @@ static int dp_cmd_fifo_tx(struct mdss_dp_drv_pdata *dp)
 		cnt++;
 		datap++;
 	}
-
 	/* clear the current tx request before queuing a new one */
 	dp_write(base + DP_AUX_TRANS_CTRL, 0);
 
@@ -328,7 +330,6 @@ static int dp_aux_read_cmds(struct mdss_dp_drv_pdata *ep,
 	} else {
 		ret = ep->aux_error_num;
 	}
-
 end:
 	ep->aux_cmd_busy = 0;
 	mutex_unlock(&ep->aux_mutex);
@@ -395,6 +396,7 @@ static int dp_aux_rw_cmds_retry(struct mdss_dp_drv_pdata *dp,
 	int i;
 	u32 aux_cfg1_config_count;
 	int ret;
+	bool connected = false;
 
 	aux_cfg1_config_count = mdss_dp_phy_aux_get_config_cnt(dp,
 			PHY_AUX_CFG1);
@@ -403,6 +405,16 @@ retry:
 	ret = 0;
 	do {
 		struct edp_cmd cmd1 = *cmd;
+
+		mutex_lock(&dp->attention_lock);
+		connected = dp->cable_connected;
+		mutex_unlock(&dp->attention_lock);
+
+		if (!connected) {
+		    pr_err("dp cable disconnected\n");
+		    ret = -ENODEV;
+			goto end;
+		}
 
 		dp->aux_error_num = EDP_AUX_ERR_NONE;
 		pr_debug("Trying %s, iteration count: %d\n",
@@ -633,7 +645,8 @@ void dp_extract_edid_video_support(struct edp_edid *edid, char *buf)
 		pr_debug("Digital Video intf=%d color_depth=%d\n",
 			 edid->video_intf, edid->color_depth);
 	} else {
-		pr_err("Error, Analog video interface\n");
+		pr_debug("Analog video interface, set color depth to 8\n");
+		edid->color_depth = DP_TEST_BIT_DEPTH_8;
 	}
 };
 
@@ -861,7 +874,7 @@ void dp_extract_edid_detailed_timing_description(struct edp_edid *edid,
 
 static int dp_aux_chan_ready(struct mdss_dp_drv_pdata *ep)
 {
-	int cnt, ret;
+	int cnt, ret = 0;
 	char data = 0;
 
 	for (cnt = 5; cnt; cnt--) {
@@ -870,6 +883,10 @@ static int dp_aux_chan_ready(struct mdss_dp_drv_pdata *ep)
 				ret, mdss_dp_get_aux_error(ep->aux_error_num));
 		if (ret >= 0)
 			break;
+
+		if (ret == -ENODEV)
+			return ret;
+
 		msleep(100);
 	}
 
@@ -957,6 +974,7 @@ int mdss_dp_edid_read(struct mdss_dp_drv_pdata *dp)
 	u32 checksum = 0;
 	bool phy_aux_update_requested = false;
 	bool ext_block_parsing_done = false;
+	bool connected = false;
 
 	ret = dp_aux_chan_ready(dp);
 	if (ret) {
@@ -975,6 +993,15 @@ int mdss_dp_edid_read(struct mdss_dp_drv_pdata *dp)
 	while (retries) {
 		u8 segment;
 		u8 edid_buf[EDID_BLOCK_SIZE] = {0};
+
+		mutex_lock(&dp->attention_lock);
+		connected = dp->cable_connected;
+		mutex_unlock(&dp->attention_lock);
+
+		if (!connected) {
+			pr_err("DP sink not connected\n");
+			return -ENODEV;
+		}
 
 		/*
 		 * Write the segment first.
@@ -1140,13 +1167,13 @@ int mdss_dp_dpcd_cap_read(struct mdss_dp_drv_pdata *ep)
 	pr_debug("rx_ports=%d", cap->num_rx_port);
 
 	data = *bp++; /* Byte 5: DOWN_STREAM_PORT_PRESENT */
-	cap->downstream_port.dfp_present = data & BIT(0);
-	cap->downstream_port.dfp_type = data & 0x6;
+	cap->downstream_port.dsp_present = data & BIT(0);
+	cap->downstream_port.dsp_type = (data & 0x6) >> 1;
 	cap->downstream_port.format_conversion = data & BIT(3);
 	cap->downstream_port.detailed_cap_info_available = data & BIT(4);
-	pr_debug("dfp_present = %d, dfp_type = %d\n",
-			cap->downstream_port.dfp_present,
-			cap->downstream_port.dfp_type);
+	pr_debug("dsp_present = %d, dsp_type = %d\n",
+			cap->downstream_port.dsp_present,
+			cap->downstream_port.dsp_type);
 	pr_debug("format_conversion = %d, detailed_cap_info_available = %d\n",
 			cap->downstream_port.format_conversion,
 			cap->downstream_port.detailed_cap_info_available);
@@ -1154,16 +1181,16 @@ int mdss_dp_dpcd_cap_read(struct mdss_dp_drv_pdata *ep)
 	bp += 1;	/* Skip Byte 6 */
 
 	data = *bp++; /* Byte 7: DOWN_STREAM_PORT_COUNT */
-	cap->downstream_port.dfp_count = data & 0x7;
-	if (cap->downstream_port.dfp_count > DP_MAX_DS_PORT_COUNT) {
+	cap->downstream_port.dsp_count = data & 0x7;
+	if (cap->downstream_port.dsp_count > DP_MAX_DS_PORT_COUNT) {
 		pr_debug("DS port count %d greater that max (%d) supported\n",
-			cap->downstream_port.dfp_count, DP_MAX_DS_PORT_COUNT);
-		cap->downstream_port.dfp_count = DP_MAX_DS_PORT_COUNT;
+			cap->downstream_port.dsp_count, DP_MAX_DS_PORT_COUNT);
+		cap->downstream_port.dsp_count = DP_MAX_DS_PORT_COUNT;
 	}
 	cap->downstream_port.msa_timing_par_ignored = data & BIT(6);
 	cap->downstream_port.oui_support = data & BIT(7);
-	pr_debug("dfp_count = %d, msa_timing_par_ignored = %d\n",
-			cap->downstream_port.dfp_count,
+	pr_debug("dsp_count = %d, msa_timing_par_ignored = %d\n",
+			cap->downstream_port.dsp_count,
 			cap->downstream_port.msa_timing_par_ignored);
 	pr_debug("oui_support = %d\n", cap->downstream_port.oui_support);
 
@@ -1227,7 +1254,7 @@ int mdss_dp_aux_link_status_read(struct mdss_dp_drv_pdata *ep, int len)
 	rlen = dp_aux_read_buf(ep, 0x202, len, 0);
 	if (rlen < len) {
 		pr_err("edp aux read failed\n");
-		return 0;
+		return rlen;
 	}
 	rp = &ep->rxp;
 	bp = rp->data;
@@ -1531,7 +1558,7 @@ static void dp_sink_parse_sink_count(struct mdss_dp_drv_pdata *ep)
 	/* BIT 6*/
 	ep->sink_count.cp_ready = data & BIT(6);
 
-	pr_debug("sink_count = 0x%x, cp_ready = 0x%x\n",
+	pr_info("sink_count = 0x%x, cp_ready = 0x%x\n",
 			ep->sink_count.count, ep->sink_count.cp_ready);
 }
 
@@ -2443,21 +2470,24 @@ static int dp_start_link_train_1(struct mdss_dp_drv_pdata *ep)
 		usleep_time = ep->dpcd.training_read_interval;
 		usleep_range(usleep_time, usleep_time);
 
-		mdss_dp_aux_link_status_read(ep, 6);
+		ret = mdss_dp_aux_link_status_read(ep, 6);
+		if (ret == -ENODEV)
+			break;
+
 		if (mdss_dp_aux_clock_recovery_done(ep)) {
 			ret = 0;
 			break;
 		}
 
 		if (ep->v_level == DPCD_LINK_VOLTAGE_MAX) {
-			ret = -1;
+			ret = -EAGAIN;
 			break;	/* quit */
 		}
 
 		if (old_v_level == ep->v_level) {
 			tries++;
 			if (tries >= maximum_retries) {
-				ret = -1;
+				ret = -EAGAIN;
 				break;	/* quit */
 			}
 		} else {
@@ -2495,7 +2525,9 @@ static int dp_start_link_train_2(struct mdss_dp_drv_pdata *ep)
 		usleep_time = ep->dpcd.training_read_interval;
 		usleep_range(usleep_time, usleep_time);
 
-		mdss_dp_aux_link_status_read(ep, 6);
+		ret = mdss_dp_aux_link_status_read(ep, 6);
+		if (ret == -ENODEV)
+			break;
 
 		if (mdss_dp_aux_channel_eq_done(ep)) {
 			ret = 0;
@@ -2503,7 +2535,7 @@ static int dp_start_link_train_2(struct mdss_dp_drv_pdata *ep)
 		}
 
 		if (tries > maximum_retries) {
-			ret = -1;
+			ret = -EAGAIN;
 			break;
 		}
 		tries++;
@@ -2540,15 +2572,6 @@ static int dp_link_rate_down_shift(struct mdss_dp_drv_pdata *ep)
 	return ret;
 }
 
-int mdss_dp_aux_set_sink_power_state(struct mdss_dp_drv_pdata *ep, char state)
-{
-	int ret;
-
-	ret = dp_aux_write_buf(ep, 0x600, &state, 1, 0);
-	pr_debug("state=%d ret=%d\n", state, ret);
-	return ret;
-}
-
 static void dp_clear_training_pattern(struct mdss_dp_drv_pdata *ep)
 {
 	int usleep_time;
@@ -2577,7 +2600,7 @@ int mdss_dp_link_train(struct mdss_dp_drv_pdata *dp)
 
 	ret = dp_start_link_train_1(dp);
 	if (ret < 0) {
-		if (!dp_link_rate_down_shift(dp)) {
+		if ((ret == -EAGAIN) && !dp_link_rate_down_shift(dp)) {
 			pr_debug("retry with lower rate\n");
 			dp_clear_training_pattern(dp);
 			return -EAGAIN;
@@ -2588,7 +2611,7 @@ int mdss_dp_link_train(struct mdss_dp_drv_pdata *dp)
 		}
 	}
 
-	pr_debug("Training 1 completed successfully\n");
+	pr_info("Training 1 completed successfully\n");
 
 	dp_write(dp->base + DP_STATE_CTRL, 0x0);
 	/* Make sure to clear the current pattern before starting a new one */
@@ -2596,7 +2619,7 @@ int mdss_dp_link_train(struct mdss_dp_drv_pdata *dp)
 
 	ret = dp_start_link_train_2(dp);
 	if (ret < 0) {
-		if (!dp_link_rate_down_shift(dp)) {
+		if ((ret == -EAGAIN) && !dp_link_rate_down_shift(dp)) {
 			pr_debug("retry with lower rate\n");
 			dp_clear_training_pattern(dp);
 			return -EAGAIN;
@@ -2607,7 +2630,7 @@ int mdss_dp_link_train(struct mdss_dp_drv_pdata *dp)
 		}
 	}
 
-	pr_debug("Training 2 completed successfully\n");
+	pr_info("Training 2 completed successfully\n");
 
 	dp_write(dp->base + DP_STATE_CTRL, 0x0);
 	/* Make sure to clear the current pattern before starting a new one */
@@ -2633,7 +2656,7 @@ int mdss_dp_dpcd_status_read(struct mdss_dp_drv_pdata *ep)
 
 	ret = mdss_dp_aux_link_status_read(ep, 6);
 
-	if (ret) {
+	if (ret > 0) {
 		sp = &ep->link_status;
 		ret = sp->port_0_in_sync; /* 1 == sync */
 	}

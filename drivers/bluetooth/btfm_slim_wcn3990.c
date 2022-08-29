@@ -10,8 +10,8 @@
  * GNU General Public License for more details.
  */
 #include <linux/slimbus/slimbus.h>
-#include <btfm_slim.h>
-#include <btfm_slim_wcn3990.h>
+#include "btfm_slim.h"
+#include "btfm_slim_wcn3990.h"
 
 /* WCN3990 Port assignment */
 struct btfmslim_ch wcn3990_rxport[] = {
@@ -88,20 +88,21 @@ int btfm_slim_chrk_enable_port(struct btfmslim *btfmslim, uint8_t port_num,
 
 	BTFMSLIM_DBG("port(%d) enable(%d)", port_num, enable);
 	if (rxport) {
-		if (enable && btfmslim->sample_rate == 48000) {
-			/* For A2DP Rx */
-			reg_val = 0x1;
-			port_bit = port_num - 0x10;
-			reg = CHRK_SB_PGD_RX_PORTn_MULTI_CHNL_0(port_bit);
-			BTFMSLIM_DBG("writing reg_val (%d) to reg(%x) for A2DP",
-					reg_val, reg);
-			ret = btfm_slim_write(btfmslim, reg, 1, &reg_val, IFD);
-			if (ret) {
-				BTFMSLIM_ERR("failed to write (%d) reg 0x%x",
-						ret, reg);
-				goto error;
-			}
-		}
+		if (enable) {
+			/* For SCO Rx, A2DP Rx */
+            reg_val = 0x1;
+            port_bit = port_num - 0x10;
+            reg = CHRK_SB_PGD_RX_PORTn_MULTI_CHNL_0(port_bit);
+            BTFMSLIM_DBG("writing reg_val (%d) to reg(%x)",
+                    reg_val, reg);
+            ret = btfm_slim_write(btfmslim, reg, 1, &reg_val, IFD);
+            if (ret) {
+                BTFMSLIM_ERR("failed to write (%d) reg 0x%x",
+                        ret, reg);
+                goto error;
+            }
+        }
+
 		/* Port enable */
 		reg = CHRK_SB_PGD_PORT_RX_CFGN(port_num - 0x10);
 		goto enable_disable_rxport;
@@ -109,8 +110,8 @@ int btfm_slim_chrk_enable_port(struct btfmslim *btfmslim, uint8_t port_num,
 	if (!enable)
 		goto enable_disable_txport;
 
-	/* txport */
-	/* Multiple Channel Setting */
+    /* txport */
+    /* Multiple Channel Setting */
 	if (is_fm_port(port_num)) {
 		reg_val = (0x1 << CHRK_SB_PGD_PORT_TX1_FM) |
 				(0x1 << CHRK_SB_PGD_PORT_TX2_FM);

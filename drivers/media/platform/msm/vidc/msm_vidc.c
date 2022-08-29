@@ -435,13 +435,60 @@ static inline void save_v4l2_buffer(struct v4l2_buffer *b,
 	}
 }
 
+static int __map_and_update_binfo(struct msm_vidc_inst *inst,
+					struct buffer_info *binfo,
+					struct v4l2_buffer *b, int i)
+{
+	int rc = 0;
+	struct msm_smem *same_fd_handle = NULL;
+
+	same_fd_handle = get_same_fd_buffer(
+			inst, b->m.planes[i].reserved[0]);
+
+	if (same_fd_handle) {
+		binfo->device_addr[i] =
+		same_fd_handle->device_addr + binfo->buff_off[i];
+		b->m.planes[i].m.userptr = binfo->device_addr[i];
+		binfo->handle[i] = same_fd_handle;
+	} else {
+		binfo->handle[i] = map_buffer(inst, &b->m.planes[i],
+				get_hal_buffer_type(inst, b));
+		if (!binfo->handle[i])
+			return -EINVAL;
+
+		binfo->mapped[i] = true;
+		binfo->device_addr[i] = binfo->handle[i]->device_addr +
+			binfo->buff_off[i];
+		b->m.planes[i].m.userptr = binfo->device_addr[i];
+	}
+
+	return rc;
+}
+
+static int __handle_fw_referenced_buffers(struct msm_vidc_inst *inst,
+					struct buffer_info *binfo,
+					struct v4l2_buffer *b)
+{
+	int i = 0, rc = 0;
+
+	if (EXTRADATA_IDX(b->length)) {
+		i = EXTRADATA_IDX(b->length);
+		if (b->m.planes[i].length)
+			rc = __map_and_update_binfo(inst, binfo, b, i);
+	}
+
+	if (rc)
+		dprintk(VIDC_ERR, "%s: Failed to map extradata\n", __func__);
+
+	return rc;
+}
+
 int map_and_register_buf(struct msm_vidc_inst *inst, struct v4l2_buffer *b)
 {
 	struct buffer_info *binfo = NULL;
 	struct buffer_info *temp = NULL, *iterator = NULL;
 	int plane = 0;
 	int i = 0, rc = 0;
-	struct msm_smem *same_fd_handle = NULL;
 
 	if (!b || !inst) {
 		dprintk(VIDC_ERR, "%s: invalid input\n", __func__);
@@ -517,39 +564,23 @@ int map_and_register_buf(struct msm_vidc_inst *inst, struct v4l2_buffer *b)
 			rc = 0;
 			goto exit;
 		} else if (rc == 2) {
-			rc = -EEXIST;
+			rc = __handle_fw_referenced_buffers(inst, temp, b);
+			if (!rc)
+				rc = -EEXIST;
 			goto exit;
 		}
 
-		same_fd_handle = get_same_fd_buffer(
-				inst, b->m.planes[i].reserved[0]);
-
 		populate_buf_info(binfo, b, i);
-		if (same_fd_handle) {
-			binfo->device_addr[i] =
-			same_fd_handle->device_addr + binfo->buff_off[i];
-			b->m.planes[i].m.userptr = binfo->device_addr[i];
-			binfo->mapped[i] = false;
-			binfo->handle[i] = same_fd_handle;
-		} else {
-			binfo->handle[i] = map_buffer(inst, &b->m.planes[i],
-					get_hal_buffer_type(inst, b));
-			if (!binfo->handle[i]) {
-				rc = -EINVAL;
-				goto exit;
-			}
 
-			binfo->mapped[i] = true;
-			binfo->device_addr[i] = binfo->handle[i]->device_addr +
-				binfo->buff_off[i];
-			b->m.planes[i].m.userptr = binfo->device_addr[i];
-		}
+		rc = __map_and_update_binfo(inst, binfo, b, i);
+		if (rc)
+			goto map_err;
 
 		/* We maintain one ref count for all planes*/
 		if (!i && is_dynamic_output_buffer_mode(b, inst)) {
 			rc = buf_ref_get(inst, binfo);
 			if (rc < 0)
-				goto exit;
+				goto map_err;
 		}
 		dprintk(VIDC_DBG,
 			"%s: [MAP] binfo = %pK, handle[%d] = %pK, device_addr = %pa, fd = %d, offset = %d, mapped = %d\n",
@@ -563,10 +594,14 @@ int map_and_register_buf(struct msm_vidc_inst *inst, struct v4l2_buffer *b)
 	mutex_unlock(&inst->registeredbufs.lock);
 	return 0;
 
+map_err:
+	if (binfo->handle[0] && binfo->mapped[0])
+		msm_comm_smem_free(inst, binfo->handle[0]);
 exit:
 	kfree(binfo);
 	return rc;
 }
+
 int unmap_and_deregister_buf(struct msm_vidc_inst *inst,
 			struct buffer_info *binfo)
 {
@@ -631,6 +666,7 @@ int unmap_and_deregister_buf(struct msm_vidc_inst *inst,
 			temp->handle[i] = 0;
 			temp->device_addr[i] = 0;
 			temp->uvaddr[i] = 0;
+			temp->mapped[i] = false;
 		}
 	}
 	if (!keep_node) {

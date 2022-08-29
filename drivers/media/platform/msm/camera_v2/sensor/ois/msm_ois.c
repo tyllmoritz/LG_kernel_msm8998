@@ -14,17 +14,24 @@
 
 #include <linux/module.h>
 #include <linux/firmware.h>
-#include "msm_sd.h"
 #include "msm_ois.h"
 #include "msm_cci.h"
 
+#ifdef CONFIG_MACH_LGE
+#include "msm_ois_i2c.h"
+#include "../msm_sensor.h"
+#endif
 DEFINE_MSM_MUTEX(msm_ois_mutex);
-/*#define MSM_OIS_DEBUG*/
-#undef CDBG
-#ifdef MSM_OIS_DEBUG
-#define CDBG(fmt, args...) pr_err(fmt, ##args)
+#if 1//def CONFIG_MACH_LGE
+	/* Moved to msm_ois.h */
 #else
-#define CDBG(fmt, args...) pr_debug(fmt, ##args)
+	//#define MSM_OIS_DEBUG
+	#undef CDBG
+	#ifdef MSM_OIS_DEBUG
+	#define CDBG(fmt, args...) pr_err(fmt, ##args)
+	#else
+	#define CDBG(fmt, args...) pr_debug(fmt, ##args)
+	#endif
 #endif
 
 static struct v4l2_file_operations msm_ois_v4l2_subdev_fops;
@@ -32,7 +39,24 @@ static int32_t msm_ois_power_up(struct msm_ois_ctrl_t *o_ctrl);
 static int32_t msm_ois_power_down(struct msm_ois_ctrl_t *o_ctrl);
 
 static struct i2c_driver msm_ois_i2c_driver;
+#define RENESAS_MODULE
+#ifdef CONFIG_MACH_LGE
+static struct msm_ois_ctrl_t *local_msm_ois_t;
+uint16_t cal_ver = 0;
+uint16_t map_ver = 0;
+#define EEPROM_SLAVE_ID (0xA8)
+#define MAP_VERSION (0xbe2)
+extern void lgit_imx351_rohm_ois_init(struct msm_ois_ctrl_t *msm_ois_t);
+#ifdef RENESAS_MODULE
+extern void msm_renesas_ois_init(struct msm_ois_ctrl_t *o_ctrl);
+extern int32_t msm_ois_fw_update(struct msm_ois_ctrl_t *o_ctrl, const char* fw_name);
+extern int32_t msm_ois_renesas_get_info(struct msm_ois_ctrl_t *o_ctrl, struct msm_ois_info_t *ois_info);
+extern int32_t msm_ois_hall_polarity_check(struct msm_ois_ctrl_t *o_ctrl);
+extern int32_t msm_ois_gyro_data_check(struct msm_ois_ctrl_t *o_ctrl);
+extern int32_t msm_ois_gyro_calibration(struct msm_ois_ctrl_t *o_ctrl);
+#endif
 
+#endif
 static int32_t msm_ois_download(struct msm_ois_ctrl_t *o_ctrl)
 {
 	uint16_t bytes_in_tx = 0;
@@ -161,79 +185,79 @@ static int32_t msm_ois_write_settings(struct msm_ois_ctrl_t *o_ctrl,
 
 	for (i = 0; i < size; i++) {
 		switch (settings[i].i2c_operation) {
-		case MSM_OIS_WRITE: {
-			switch (settings[i].data_type) {
-			case MSM_CAMERA_I2C_BYTE_DATA:
-			case MSM_CAMERA_I2C_WORD_DATA:
-				rc = o_ctrl->i2c_client.i2c_func_tbl->i2c_write(
-					&o_ctrl->i2c_client,
-					settings[i].reg_addr,
-					settings[i].reg_data,
-					settings[i].data_type);
-				break;
-			case MSM_CAMERA_I2C_DWORD_DATA:
-			reg_setting =
-			kzalloc(sizeof(struct msm_camera_i2c_seq_reg_array),
-				GFP_KERNEL);
-				if (!reg_setting)
-					return -ENOMEM;
+			case MSM_OIS_WRITE: {
+				switch (settings[i].data_type) {
+					case MSM_CAMERA_I2C_BYTE_DATA:
+					case MSM_CAMERA_I2C_WORD_DATA:
+						rc = o_ctrl->i2c_client.i2c_func_tbl->i2c_write(
+							&o_ctrl->i2c_client,
+							settings[i].reg_addr,
+							settings[i].reg_data,
+							settings[i].data_type);
+						break;
+					case MSM_CAMERA_I2C_DWORD_DATA:
+					reg_setting =
+					kzalloc(sizeof(struct msm_camera_i2c_seq_reg_array),
+						GFP_KERNEL);
+						if (!reg_setting)
+							return -ENOMEM;
 
-				reg_setting->reg_addr = settings[i].reg_addr;
-				reg_setting->reg_data[0] = (uint8_t)
-					((settings[i].reg_data &
-					0xFF000000) >> 24);
-				reg_setting->reg_data[1] = (uint8_t)
-					((settings[i].reg_data &
-					0x00FF0000) >> 16);
-				reg_setting->reg_data[2] = (uint8_t)
-					((settings[i].reg_data &
-					0x0000FF00) >> 8);
-				reg_setting->reg_data[3] = (uint8_t)
-					(settings[i].reg_data & 0x000000FF);
-				reg_setting->reg_data_size = 4;
-				rc = o_ctrl->i2c_client.i2c_func_tbl->
-					i2c_write_seq(&o_ctrl->i2c_client,
-					reg_setting->reg_addr,
-					reg_setting->reg_data,
-					reg_setting->reg_data_size);
-				kfree(reg_setting);
-				reg_setting = NULL;
-				if (rc < 0)
-					return rc;
+						reg_setting->reg_addr = settings[i].reg_addr;
+						reg_setting->reg_data[0] = (uint8_t)
+							((settings[i].reg_data &
+							0xFF000000) >> 24);
+						reg_setting->reg_data[1] = (uint8_t)
+							((settings[i].reg_data &
+							0x00FF0000) >> 16);
+						reg_setting->reg_data[2] = (uint8_t)
+							((settings[i].reg_data &
+							0x0000FF00) >> 8);
+						reg_setting->reg_data[3] = (uint8_t)
+							(settings[i].reg_data & 0x000000FF);
+						reg_setting->reg_data_size = 4;
+						rc = o_ctrl->i2c_client.i2c_func_tbl->
+							i2c_write_seq(&o_ctrl->i2c_client,
+							reg_setting->reg_addr,
+							reg_setting->reg_data,
+							reg_setting->reg_data_size);
+						kfree(reg_setting);
+						reg_setting = NULL;
+						if (rc < 0)
+							return rc;
+						break;
+
+					default:
+						pr_err("Unsupport data type: %d\n",
+							settings[i].data_type);
+						break;
+				}
+				if (settings[i].delay > 20)
+					msleep(settings[i].delay);
+				else if (0 != settings[i].delay)
+					usleep_range(settings[i].delay * 1000,
+						(settings[i].delay * 1000) + 1000);
+				}
 				break;
 
-			default:
-				pr_err("Unsupport data type: %d\n",
-					settings[i].data_type);
-				break;
+			case MSM_OIS_POLL: {
+				switch (settings[i].data_type) {
+				case MSM_CAMERA_I2C_BYTE_DATA:
+				case MSM_CAMERA_I2C_WORD_DATA:
+
+					rc = o_ctrl->i2c_client.i2c_func_tbl
+						->i2c_poll(&o_ctrl->i2c_client,
+						settings[i].reg_addr,
+						settings[i].reg_data,
+						settings[i].data_type,
+						settings[i].delay);
+					break;
+
+				default:
+					pr_err("Unsupport data type: %d\n",
+						settings[i].data_type);
+					break;
+				}
 			}
-			if (settings[i].delay > 20)
-				msleep(settings[i].delay);
-			else if (0 != settings[i].delay)
-				usleep_range(settings[i].delay * 1000,
-					(settings[i].delay * 1000) + 1000);
-		}
-			break;
-
-		case MSM_OIS_POLL: {
-			switch (settings[i].data_type) {
-			case MSM_CAMERA_I2C_BYTE_DATA:
-			case MSM_CAMERA_I2C_WORD_DATA:
-
-				rc = o_ctrl->i2c_client.i2c_func_tbl
-					->i2c_poll(&o_ctrl->i2c_client,
-					settings[i].reg_addr,
-					settings[i].reg_data,
-					settings[i].data_type,
-					settings[i].delay);
-				break;
-
-			default:
-				pr_err("Unsupport data type: %d\n",
-					settings[i].data_type);
-				break;
-			}
-		}
 		}
 
 		if (rc < 0)
@@ -339,6 +363,29 @@ static int msm_ois_init(struct msm_ois_ctrl_t *o_ctrl)
 		if (rc < 0)
 			pr_err("cci_init failed\n");
 	}
+
+#ifdef CONFIG_MACH_LGE
+	ois_i2c_e2p_read(MAP_VERSION, &map_ver, 1);
+	pr_err("map_ver: 0x%x", map_ver);
+
+	switch(map_ver)
+	{
+#ifdef RENESAS_MODULE
+		case 0xFF:
+		case 0x01:
+		case 0x02:
+			msm_renesas_ois_init(o_ctrl);
+			break;
+#endif
+		case 0x03:
+			lgit_imx351_rohm_ois_init(o_ctrl);
+			local_msm_ois_t->sid_ois = o_ctrl->sid_ois;
+			break;
+		default:
+			printk("%s : unknown module! map_version = %d\n", __func__, map_ver);
+			return -EINVAL;
+	}
+#endif
 	o_ctrl->ois_state = OIS_OPS_ACTIVE;
 	CDBG("Exit\n");
 	return rc;
@@ -433,10 +480,77 @@ static int32_t msm_ois_config(struct msm_ois_ctrl_t *o_ctrl,
 		if (rc < 0)
 			pr_err("Failed ois control%d\n", rc);
 		break;
+#ifdef CONFIG_MACH_LGE
+	case CFG_GET_OIS_INFO:
+		rc = o_ctrl->func_tbl->ois_stat(o_ctrl,
+										&cdata->cfg.set_info);
+		if (rc < 0)
+			pr_err("ois info failed %d\n", rc);
+		break;
+	case CFG_OIS_INI_SET:
+		if( o_ctrl->func_tbl->ini_set_ois != NULL){
+			rc = o_ctrl->func_tbl->ini_set_ois(o_ctrl,
+										   &cdata->cfg.set_info);
+			if (rc < 0)
+				pr_err("init setup ois failed %d\n", rc);
+		}else{
+			pr_err("cdata->cfgtype %d function is NULL ", cdata->cfgtype);
+		}
+		break;
+	case CFG_OIS_ENABLE:
+		if( o_ctrl->func_tbl->enable_ois != NULL){
+			rc = o_ctrl->func_tbl->enable_ois(o_ctrl,
+											  &cdata->cfg.set_info);
+			if (rc < 0)
+				pr_err("ois enable failed %d\n", rc);
+		}else{
+			pr_err("cdata->cfgtype %d function is NULL ", cdata->cfgtype);
+		}
+		break;
+	case CFG_OIS_DISABLE:
+		if( o_ctrl->func_tbl->disable_ois != NULL){
+			rc = o_ctrl->func_tbl->disable_ois(o_ctrl,
+											   &cdata->cfg.set_info);
+			if (rc < 0)
+				pr_err("ois disable failed %d\n", rc);
+		}else{
+			pr_err("cdata->cfgtype %d function is NULL ", cdata->cfgtype);
+		}
+		break;
+	case CFG_OIS_MOVE_LENS:
+		if( o_ctrl->func_tbl->ois_move_lens != NULL){
+			rc = o_ctrl->func_tbl->ois_move_lens(o_ctrl, &cdata->cfg.set_info);
+			if (rc < 0)
+				pr_err("ois move lens failed %d\n", rc);
+		}else{
+			pr_err("cdata->cfgtype %d function is NULL ", cdata->cfgtype);
+		}
+		break;
+	case CFG_OIS_SET_MODE:
+		if( o_ctrl->func_tbl->ois_mode != NULL){
+			rc = o_ctrl->func_tbl->ois_mode(o_ctrl,&cdata->cfg.set_info);
+			if (rc < 0)
+				pr_err("ois mode set failed %d\n", rc);
+		}else{
+			pr_err("cdata->cfgtype %d function is NULL ", cdata->cfgtype);
+		}
+		break;
+	case CFG_OIS_PWM_MODE:
+		if( o_ctrl->func_tbl->ois_pwm_mode != NULL){
+			rc = o_ctrl->func_tbl->ois_pwm_mode(o_ctrl,
+									&cdata->cfg.set_info);
+			if (rc < 0)
+				pr_err("ois pwm mode set failed %d\n", rc);
+		}else{
+			pr_err("cdata->cfgtype %d function is NULL ", cdata->cfgtype);
+		}
+	break;
+#endif
+
+
 	case CFG_OIS_I2C_WRITE_SEQ_TABLE: {
 		struct msm_camera_i2c_seq_reg_setting conf_array;
 		struct msm_camera_i2c_seq_reg_array *reg_setting = NULL;
-
 #ifdef CONFIG_COMPAT
 		if (is_compat_task()) {
 			memcpy(&conf_array,
@@ -474,7 +588,11 @@ static int32_t msm_ois_config(struct msm_ois_ctrl_t *o_ctrl,
 			rc = -EFAULT;
 			break;
 		}
-
+#ifdef RENESAS_MODULE
+		o_ctrl->i2c_client.cci_client->sid = 0x24; //0x48 >> 1;
+		o_ctrl->i2c_client.cci_client->i2c_freq_mode = I2C_CUSTOM_MODE;
+		CDBG("CFG_OIS_I2C_WRITE_SEQ_TABLEe sid %x\n", o_ctrl->i2c_client.cci_client->sid);
+#endif
 		conf_array.reg_setting = reg_setting;
 		rc = o_ctrl->i2c_client.i2c_func_tbl->
 			i2c_write_seq_table(&o_ctrl->i2c_client,
@@ -482,6 +600,26 @@ static int32_t msm_ois_config(struct msm_ois_ctrl_t *o_ctrl,
 		kfree(reg_setting);
 		break;
 	}
+
+#ifdef RENESAS_MODULE
+	case CFG_OIS_GYRO_CALIBRATION:
+		rc = msm_ois_gyro_calibration(o_ctrl);
+		msm_ois_gyro_data_check(o_ctrl);
+	    CDBG("CFG_OIS_GYRO_CALIBRATION result : %d \n", rc);
+
+	break;
+	case CFG_OIS_GET_INFO:
+		CDBG("CFG_OIS_GET_INFO\n");
+
+	break;
+
+	case CFG_OIS_MOVEMENT_TEST:
+		CDBG("CFG_OIS_TEST\n");
+		//rc = msm_ois_mevement_test(o_ctrl);
+		rc = msm_ois_hall_polarity_check(o_ctrl);
+	break;
+#endif
+
 	default:
 		break;
 	}
@@ -515,6 +653,14 @@ static int32_t msm_ois_config_download(struct msm_ois_ctrl_t *o_ctrl,
 		if (rc < 0)
 			pr_err("Failed ois download %d\n", rc);
 		break;
+#ifdef RENESAS_MODULE
+	case CFG_OIS_RENESAS_FW_UPDATE:
+		rc = msm_ois_fw_update(o_ctrl, cdata->fw_binary);
+		if (rc < 0)
+			pr_err("Failed ois fw_update %d\n", rc);
+		break;
+#endif
+
 	default:
 		break;
 	}
@@ -621,6 +767,10 @@ static long msm_ois_subdev_ioctl(struct v4l2_subdev *sd,
 				__func__, __LINE__);
 		}
 		return msm_ois_close(sd, NULL);
+#if 1//def RENESAS_MODULE
+	case VIDIOC_MSM_OIS_GET_INFO:
+		return msm_ois_renesas_get_info(o_ctrl, argp);
+#endif
 	default:
 		return -ENOIOCTLCMD;
 	}
@@ -816,6 +966,19 @@ static long msm_ois_subdev_do_ioctl(
 			ois_data.cfg.settings = &settings;
 			parg = &ois_data;
 			break;
+
+#ifdef CONFIG_MACH_LGE
+		case CFG_OIS_INI_SET:
+		case CFG_GET_OIS_INFO:
+		case CFG_OIS_SET_MODE:
+		case CFG_OIS_MOVE_LENS:
+		case CFG_OIS_PWM_MODE:
+			ois_data.cfg.set_info.setting = compat_ptr(u32->cfg.set_info.setting);
+			ois_data.cfg.set_info.ois_info = compat_ptr(u32->cfg.set_info.ois_info);
+			parg = &ois_data;
+			break;
+#endif
+
 		default:
 			parg = &ois_data;
 			break;
@@ -833,10 +996,177 @@ static long msm_ois_subdev_fops_ioctl(struct file *file, unsigned int cmd,
 }
 #endif
 
+#ifdef CONFIG_MACH_LGE
+int32_t ois_i2c_write_table(struct msm_camera_i2c_reg_setting *write_setting)
+{
+	int32_t ret = 0;
+	struct msm_camera_cci_client *cci_client = NULL;
+
+	cci_client = local_msm_ois_t->i2c_client.cci_client;
+	cci_client->sid =  local_msm_ois_t->sid_ois;
+	cci_client->retries = 3;
+	cci_client->id_map = 0;
+	cci_client->cci_i2c_master = local_msm_ois_t->cci_master;
+	local_msm_ois_t->i2c_client.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+	ret = local_msm_ois_t->i2c_client.i2c_func_tbl->i2c_write_table(&local_msm_ois_t->i2c_client, write_setting);
+	return ret;
+}
+int32_t ois_i2c_write_seq_table(struct msm_camera_i2c_seq_reg_setting *write_setting)
+{
+	int32_t ret = 0;
+	struct msm_camera_cci_client *cci_client = NULL;
+
+	cci_client = local_msm_ois_t->i2c_client.cci_client;
+	cci_client->sid = local_msm_ois_t->sid_ois;
+	cci_client->retries = 3;
+	cci_client->id_map = 0;
+	cci_client->cci_i2c_master = local_msm_ois_t->cci_master;
+	local_msm_ois_t->i2c_client.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+
+	ret = local_msm_ois_t->i2c_client.i2c_func_tbl->i2c_write_seq_table(&local_msm_ois_t->i2c_client, write_setting);
+	return ret;
+}
+
+int32_t ois_i2c_write(uint16_t addr, uint16_t data, enum msm_camera_i2c_data_type data_type)
+{
+	int32_t ret = 0;
+	struct msm_camera_cci_client *cci_client = NULL;
+
+	cci_client = local_msm_ois_t->i2c_client.cci_client;
+	cci_client->sid = local_msm_ois_t->sid_ois;
+	cci_client->retries = 3;
+	cci_client->id_map = 0;
+	cci_client->cci_i2c_master = local_msm_ois_t->cci_master;
+	local_msm_ois_t->i2c_client.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+
+	ret = local_msm_ois_t->i2c_client.i2c_func_tbl->i2c_write(&local_msm_ois_t->i2c_client, addr, data, data_type);
+	return ret;
+}
+
+int32_t ois_i2c_read(uint16_t addr, uint16_t *data, enum msm_camera_i2c_data_type data_type)
+{
+	int32_t ret = 0;
+	struct msm_camera_cci_client *cci_client = NULL;
+
+	cci_client = local_msm_ois_t->i2c_client.cci_client;
+	cci_client->sid = local_msm_ois_t->sid_ois;
+	cci_client->retries = 3;
+	cci_client->id_map = 0;
+	cci_client->cci_i2c_master = local_msm_ois_t->cci_master;
+	local_msm_ois_t->i2c_client.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+	ret = local_msm_ois_t->i2c_client.i2c_func_tbl->i2c_read(&local_msm_ois_t->i2c_client, addr, &data[0], data_type);
+	return ret;
+}
+
+int32_t ois_i2c_write_seq(uint16_t addr, uint8_t *data, uint16_t num_byte)
+{
+	int32_t ret = 0;
+	struct msm_camera_cci_client *cci_client = NULL;
+
+	cci_client = local_msm_ois_t->i2c_client.cci_client;
+	cci_client->sid = local_msm_ois_t->sid_ois;
+	cci_client->retries = 3;
+	cci_client->id_map = 0;
+	cci_client->cci_i2c_master = local_msm_ois_t->cci_master;
+	local_msm_ois_t->i2c_client.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+	ret = local_msm_ois_t->i2c_client.i2c_func_tbl->i2c_write_seq(&local_msm_ois_t->i2c_client, addr, data, num_byte);
+	return ret;
+}
+
+int32_t ois_i2c_read_seq(uint16_t addr, uint8_t *data, uint16_t num_byte)
+{
+	int32_t ret = 0;
+	struct msm_camera_cci_client *cci_client = NULL;
+
+	cci_client = local_msm_ois_t->i2c_client.cci_client;
+	cci_client->sid = local_msm_ois_t->sid_ois;
+	cci_client->retries = 3;
+	cci_client->id_map = 0;
+	cci_client->cci_i2c_master = local_msm_ois_t->cci_master;
+	local_msm_ois_t->i2c_client.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+	ret = local_msm_ois_t->i2c_client.i2c_func_tbl->i2c_read_seq(&local_msm_ois_t->i2c_client, addr, &data[0], num_byte);
+	return ret;
+}
+
+int32_t ois_i2c_e2p_write(uint16_t addr, uint16_t data, enum msm_camera_i2c_data_type data_type)
+{
+	int32_t ret = 0;
+	struct msm_camera_cci_client *cci_client = NULL;
+
+	cci_client = local_msm_ois_t->i2c_eeprom_client.cci_client;
+	cci_client->sid = EEPROM_SLAVE_ID >> 1;
+	cci_client->i2c_freq_mode = I2C_FAST_PLUS_MODE;
+	cci_client->retries = 3;
+	cci_client->id_map = 0;
+	cci_client->cci_i2c_master = local_msm_ois_t->cci_master;
+	local_msm_ois_t->i2c_eeprom_client.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+	ret = local_msm_ois_t->i2c_eeprom_client.i2c_func_tbl->i2c_write(&local_msm_ois_t->i2c_eeprom_client, addr, data, data_type);
+	return ret;
+}
+
+int32_t ois_i2c_e2p_read(uint16_t addr, uint16_t *data, enum msm_camera_i2c_data_type data_type)
+{
+	int32_t ret = 0;
+	struct msm_camera_cci_client *cci_client = NULL;
+
+
+	cci_client = local_msm_ois_t->i2c_eeprom_client.cci_client;
+	cci_client->sid = EEPROM_SLAVE_ID >> 1;
+	cci_client->i2c_freq_mode = I2C_FAST_PLUS_MODE;
+	cci_client->retries = 3;
+	cci_client->id_map = 0;
+	cci_client->cci_i2c_master = local_msm_ois_t->cci_master;
+	local_msm_ois_t->i2c_eeprom_client.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+	ret = local_msm_ois_t->i2c_eeprom_client.i2c_func_tbl->i2c_read(&local_msm_ois_t->i2c_eeprom_client, addr, data, data_type);
+	return ret;
+}
+
+int32_t ois_i2c_e2p_read_seq(uint32_t addr, uint8_t *data, uint32_t num_byte)
+{
+	int32_t ret = 0;
+	struct msm_camera_cci_client *cci_client = NULL;
+
+
+	cci_client = local_msm_ois_t->i2c_eeprom_client.cci_client;
+	cci_client->sid = EEPROM_SLAVE_ID >> 1;
+	cci_client->i2c_freq_mode = I2C_FAST_PLUS_MODE;
+	cci_client->retries = 3;
+	cci_client->id_map = 0;
+	cci_client->cci_i2c_master = local_msm_ois_t->cci_master;
+	local_msm_ois_t->i2c_eeprom_client.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+	ret = local_msm_ois_t->i2c_eeprom_client.i2c_func_tbl->i2c_read_seq(&local_msm_ois_t->i2c_eeprom_client, addr, data, num_byte);
+	return ret;
+}
+
+
+int32_t ois_i2c_act_write(uint8_t data1, uint8_t data2)
+{
+	int32_t ret = 0;
+
+	uint16_t sid = 0;
+	struct msm_camera_i2c_client *ois_i2c_client = NULL;
+	ois_i2c_client = &local_msm_ois_t->i2c_client;
+	sid = ois_i2c_client->cci_client->sid;
+
+
+	ois_i2c_client->cci_client->sid = 0x18 >> 1;
+	ois_i2c_client->addr_type = MSM_CAMERA_I2C_BYTE_ADDR;
+
+	ret = ois_i2c_client->i2c_func_tbl->i2c_write(ois_i2c_client, data1, data2, 1);
+
+	ois_i2c_client->cci_client->sid = sid;
+	ois_i2c_client->addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+	return ret;
+}
+#endif
+
 static int32_t msm_ois_platform_probe(struct platform_device *pdev)
 {
 	int32_t rc = 0;
 	struct msm_camera_cci_client *cci_client = NULL;
+#ifdef CONFIG_MACH_LGE
+	struct msm_camera_cci_client *cci_eeprom_client = NULL;
+#endif
 	struct msm_ois_ctrl_t *msm_ois_t = NULL;
 	struct msm_ois_vreg *vreg_cfg;
 	CDBG("Enter\n");
@@ -921,6 +1251,23 @@ static int32_t msm_ois_platform_probe(struct platform_device *pdev)
 	cci_client = msm_ois_t->i2c_client.cci_client;
 	cci_client->cci_subdev = msm_cci_get_subdev();
 	cci_client->cci_i2c_master = msm_ois_t->cci_master;
+
+#ifdef CONFIG_MACH_LGE
+	msm_ois_t->i2c_eeprom_client.i2c_func_tbl = &msm_sensor_cci_func_tbl;
+	msm_ois_t->i2c_eeprom_client.cci_client = kzalloc(sizeof(
+		struct msm_camera_cci_client), GFP_KERNEL);
+	if (!msm_ois_t->i2c_eeprom_client.cci_client) {
+		kfree(msm_ois_t->vreg_cfg.cam_vreg);
+		kfree(msm_ois_t);
+		pr_err("failed no memory\n");
+		return -ENOMEM;
+	}
+
+	cci_eeprom_client = msm_ois_t->i2c_eeprom_client.cci_client;
+	cci_eeprom_client->cci_subdev = msm_cci_get_subdev();
+	cci_eeprom_client->cci_i2c_master = msm_ois_t->cci_master;
+#endif
+
 	v4l2_subdev_init(&msm_ois_t->msm_sd.sd,
 		msm_ois_t->ois_v4l2_subdev_ops);
 	v4l2_set_subdevdata(&msm_ois_t->msm_sd.sd, msm_ois_t);
@@ -942,6 +1289,13 @@ static int32_t msm_ois_platform_probe(struct platform_device *pdev)
 	msm_ois_t->msm_sd.sd.devnode->fops =
 		&msm_ois_v4l2_subdev_fops;
 
+#ifdef CONFIG_MACH_LGE
+	local_msm_ois_t = msm_ois_t;
+	#ifdef OIS_HALL_READ_WORK_Q
+	local_msm_ois_t->exit_workqueue = 1;
+	local_msm_ois_t->pause_workqueue = 0;
+	#endif
+#endif
 	CDBG("Exit\n");
 	return rc;
 release_memory:
